@@ -1,5 +1,6 @@
 // 봇으로 한 판을 돌려 딜 출처·생존 시간을 출력한다.
-// 사용: node tools/sim/bot.js <ram|kite|noweap> <seed> <분>
+// 사용: node tools/sim/bot.js <pro|proevade|rl|ram|kite|evade|noweap> <seed> <분>   (rl: 강화학습 모델, MODEL=이름 GREEDY=1, pro: 숙련 돌진형 tools/sim/pro.js, proevade: 같은 판단으로 피하기만, evade: 제대로 피하며 구슬 줍는 회피형)
+//   환경변수 SMART=1        → pro 가 아닌 봇도 카드를 pro 방식으로 고름
 //   환경변수 W=무기        → 그 무기만 최대 레벨로 시작 (LV=1 이면 1레벨)
 //   환경변수 EVK=a+b       → 해당 진화와 재료 무기 최대 레벨로 시작
 //   환경변수 LATE=1 HM=30  → 무적 + 적 체력 HM배 + 큰 무리 주기 투입 (후반 모의, 포화 없는 화력 측정)
@@ -11,6 +12,11 @@ let s=SEED;const _m=Math.random;Math.random=()=>{s=(s*16807)%2147483647;return s
 step();M.endTutorial();M.initGame(false);
 const ONLY=process.env.W,EVK=process.env.EVK;if(EVK){const [a,b]=EVK.split('+');for(const w of [a,b]){const u=M.UPS.find(x=>x.w===w);M.U[w]=u.max;}M.U.evos[EVK]=true;}if(ONLY){const u=M.UPS.find(x=>x.w===ONLY);M.U[ONLY]=+(process.env.LV||u.max);}
 const set=(k,v)=>{M.keys[k]=v;};
+const PRO=BOT==='rl'?(()=>{   // 강화학습 모델: MODEL=이름 (tools/rl/models/이름.json), GREEDY=1 이면 최선 행동만
+    const m=JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'..','rl','models',(process.env.MODEL||'latest').replace(/\.json$/,'')+'.json'),'utf8'));
+    if(!require('../rl/features').compatible(m.spec,M)){console.error('모델 사양이 지금 게임과 다름 (카드·적 종류·스킬 상태가 바뀜). 다시 학습 필요');process.exit(1);}
+    let rs=SEED*977+3;return require('../rl/net').makeBot(M,set,m,{greedy:!!process.env.GREEDY,rnd:()=>{rs=(rs*48271)%2147483647;return rs/2147483647;}});})()
+  :require('./pro')(M,set,BOT==='proevade');   // 숙련 돌진형 봇 (proevade: 같은 판단의 숙련 회피형)
 const CAT={ram:'몸통',billiard:'몸통',cherenkov:'몸통',enemyboom:'기타',etc:'기타'};
 let bucket={},buckets=[],dlog=(src,d)=>{bucket[src]=(bucket[src]||0)+d;};M.setDmgLog(dlog);
 let rng2=SEED*7+1;const r2=()=>{rng2=(rng2*48271)%2147483647;return rng2/2147483647;};   // 카드 선택용 (봇과 무관하게 동일)
@@ -50,14 +56,29 @@ function botKite(){
   const tx=-(P.y-1800)*orbitDir,ty=(P.x-2800)*orbitDir,tl=Math.hypot(tx,ty)||1;let dx=ax*3+tx/tl,dy=ay*3+ty/tl;
   [dx,dy]=wallAvoid(dx,dy);steer(dx,dy);
 }
+// 회피형(evade): 사람이 하는 "피해 다니며 줍기"에 가깝게. 적의 0.35초 뒤 위치를 예측해 피하고, 적이 없는 쪽의 구슬을 주움.
+// 충돌이 피할 수 없을 때만 커져서 내 속도 변화(받는 피해)를 줄임. 박는 쪽과 공정하게 비교하기 위한 기준.
+function botEvade(){
+  const P=M.P,es=M.enemies.filter(e=>!e.dead&&e.spawn<=0);
+  let ax=0,ay=0;
+  for(const e of es){const px=e.x+e.vx*.35,py=e.y+e.vy*.35,dx=P.x-px,dy=P.y-py,d=Math.hypot(dx,dy)-e.r-P.r;if(d<520){const q=Math.max(20,d);ax+=dx/(q*q)*400;ay+=dy/(q*q)*400;}}
+  // 안전한 구슬로 끌림 (구슬 근처에 적이 있으면 무시)
+  let ob=null,bd=520;for(const o of M.orbs){const d=Math.hypot(o.x-P.x,o.y-P.y);if(d>=bd)continue;let safe=true;for(const e of es){if(Math.abs(e.x-o.x)<110&&Math.abs(e.y-o.y)<110){safe=false;break;}}if(safe){bd=d;ob=o;}}
+  if(ob){const dx=ob.x-P.x,dy=ob.y-P.y,d=Math.hypot(dx,dy)||1;ax+=dx/d*.9;ay+=dy/d*.9;}
+  else{const tx=-(P.y-1800)*orbitDir,ty=(P.x-2800)*orbitDir,tl=Math.hypot(tx,ty)||1;ax+=tx/tl*.5;ay+=ty/tl*.5;}
+  let [dx,dy]=wallAvoid(ax,ay);steer(dx,dy);
+  let tm=9;for(const e of es){const ex=e.x-P.x,ey=e.y-P.y,dd=Math.hypot(ex,ey);if(dd>500)continue;const c=((P.vx-e.vx)*ex+(P.vy-e.vy)*ey)/(dd||1);if(c>0){const t=(dd-P.r-e.r-M.U.rmax*.6)/c;if(t<tm)tm=t;}}
+  const g=tm<.3&&P.energy>4&&!P.overload;set('Semicolon',g);
+  set('KeyL',!g&&(!process.env.EVSZ||P.r>M.U.rmin+(+process.env.EVSZ)));   // EVSZ=n: 최소 크기+n 으로 유지(너무 빠르지 않게)
+}
 let hurt={};global.__hurt=(d,ph,r)=>{const k=ph+(r<12?'/작음':r<25?'/중간':'/큼');hurt[k]=(hurt[k]||0)+Math.min(d,60);};
 const T0=Date.now();let lastB=0,dead=false,minute=0;
 const FR=60*60*MINS;
 for(let i=0;i<FR;i++){
-  if(M.state==='play'){if(BOT==='ram'||BOT==='noweap')botRam();else{botKite();
+  if(M.state==='play'){if(BOT==='pro'||BOT==='proevade'||BOT==='rl')PRO.tick();else if(BOT==='ram'||BOT==='noweap')botRam();else if(BOT==='evade')botEvade();else{botKite();
     const P=M.P;let tm=9;for(const e of M.enemies){if(e.dead||e.spawn>0)continue;const ex=e.x-P.x,ey=e.y-P.y,dd=Math.hypot(ex,ey);if(dd>500)continue;const c=((P.vx-e.vx)*ex+(P.vy-e.vy)*ey)/(dd||1);if(c>0){const t=(dd-P.r-e.r-M.U.rmax*.6)/c;if(t<tm)tm=t;}}
     const g=tm<.3&&P.energy>4&&!P.overload;set('Semicolon',g);set('KeyL',!g);}}
-  if(M.state==='upgrade'){let pick=Math.floor(r2()*M.opts.length);
+  if(M.state==='upgrade'){let pick=Math.floor(r2()*M.opts.length);if(BOT==='pro'||BOT==='proevade'||BOT==='rl'||process.env.SMART)pick=PRO.pickCard();
     if(ONLY||EVK||BOT==='noweap'){const ok=M.opts.findIndex(o=>!M.UPS[o].w&&!M.UPS[o].evo);if(ok>=0)pick=ok;}
     M.pick(pick);}
   if(process.env.LATE){if(i===0){M.U.hpMul=1e5;M.U.hpMax=1e7;}M.P.hp=M.U.hpMax;for(const e of M.enemies)if(!e._t){e._t=1;const hm=+(process.env.HM||8);e.hp*=hm;e.max*=hm;}if(i%600===0){const P=M.P;for(let j=0;j<60;j++){const a=Math.random()*6.28,d=300+Math.random()*900;const e=M.mkEnemy(['chaser','chaser','swarm','shield','charger','spiker','splitter','bomber'][j%8],P.x+Math.cos(a)*d,P.y+Math.sin(a)*d);e.spawn=0;M.enemies.push(e);}}}
@@ -76,5 +97,7 @@ if(EVK){const core=(ALL.ram||0)+(ALL.billiard||0)+(ALL.cherenkov||0);const wd=TO
   console.log(JSON.stringify({k:EVK,seed:SEED,surv:+(M.time/60).toFixed(1),dead,kills:M.kills,wdps:Math.round(wd/M.time),evo:Math.round((ALL.evo||0)/M.time)}));}
 if(ONLY){const tags={shrap:['shrap'],chain:['chain'],hole:['hole'],orbit:['orbit'],aura:['aura'],fire:['fire'],missile:['missile','wboom'],mine:['mine','wboom']}[ONLY];const wd=tags.reduce((a,t)=>a+(ALL[t]||0),0);
   console.log(JSON.stringify({w:ONLY,seed:SEED,surv:+(M.time/60).toFixed(1),dead,kills:M.kills,lvl:M.lvl,wdps:Math.round(wd/M.time),share:Math.round(wd/TOT*100),core:Math.round(((ALL.ram||0)+(ALL.billiard||0)+(ALL.cherenkov||0))/TOT*100)}));}
+if(process.env.RES){const core=(ALL.ram||0)+(ALL.billiard||0)+(ALL.cherenkov||0);   // 돌진형·회피형 비교용 요약 한 줄
+  console.log('RES '+JSON.stringify({bot:BOT,seed:SEED,surv:+(M.time/60).toFixed(2),dead,kills:M.kills,lvl:M.lvl,score:M.score||0,core:Math.round(core/(TOT||1)*100),hurt:Math.round(Object.values(hurt).reduce((a,c)=>a+c,0))}));}
 console.log(`[${BOT} seed${SEED}] ${dead?'사망 '+(M.time/60).toFixed(1)+'분':'생존 '+MINS+'분'} 레벨 ${M.lvl} 처치 ${M.kills} 무기 ${M.UPS.filter(u=>u.w&&M.U[u.w]>0).map(u=>u.n+M.U[u.w]).join(' ')} 진화 ${Object.keys(M.U.evos).join(',')} (${((Date.now()-T0)/1000).toFixed(0)}s)`);
 console.log(rows.join('\n'));console.log('  받은 피해:',Object.entries(hurt).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k,v])=>k+' '+Math.round(v)).join(', '));
