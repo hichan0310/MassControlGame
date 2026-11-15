@@ -1,0 +1,14 @@
+{
+  "name": "mass-game",
+  "version": "0.1.0",
+  "private": true,
+  "description": "크기·질량 조작 액션 서바이벌 프로토타입 (단일 index.html)",
+  "scripts": {
+    "extract": "python3 tools/sim/extract.py",
+    "smoke": "python3 tools/sim/extract.py && node tools/sim/smoke.js",
+    "bot": "python3 tools/sim/extract.py && node tools/sim/bot.js ram 7 5",
+    "matrix": "sh tools/sim/matrix.sh",
+    "docs": "python3 tools/sim/extract.py && node tools/gen_docs.js",
+    "serve": "python3 -m http.server 8000"
+  }
+}

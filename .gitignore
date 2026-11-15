@@ -1,0 +1,7 @@
+tools/sim/build/
+tools/sim/out/
+*.png
+!docs/*.png
+node_modules/
+__pycache__/
+.DS_Store
