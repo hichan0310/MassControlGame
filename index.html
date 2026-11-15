@@ -162,6 +162,7 @@ let tut=null;
 let flames=[],missiles=[],mines=[],auraT=0,flameT=0,missileT=1,mineT=0;
 let evoSeen={},spMode=false,sel=0,pbullets=[],bolts=[],moons=[],chainCd=0,shrapCd=0,growPulseT=0,moonAng=0;
 let state='title',P,enemies=[],bullets=[],parts=[],rings=[],texts=[],debris=[],rocks=[],orbs=[],booms=[];
+let pierceN=0,pierceT=0,orbMul=1;   // 관통: 0.5초 안에 몸으로 연속 처치한 수, 구슬 값 배율
 let combo=0,comboT=0,score=0,kills=0,bestImpact=0,shake=0,hitstop=0,time=0,flash=0,banner=0,bannerText='';
 let opts=[],best=0,lastHS=-1,sweepN=0,sweepT=0,sweepShow=0,sweepBest=0;
 let heavyT=18,xp=0,lvl=1,pendingLv=0,packT=0,surgeT=0,surgeN=0,eliteT=0,orbStreak=0,orbStreakT=0;
@@ -197,7 +198,7 @@ const EVO_DESC={
   'hole+fire':'블랙홀이 터질 때 불 고리가 퍼져 나가고, 그 자리에 불바다가 남음',
   'hole+missile':'미사일이 터진 자리에 블랙홀이 생김',
   'hole+mine':'내 지뢰가 밟히면 터지는 대신 블랙홀이 생김. 블랙홀이 꺼지면 주변에 일반 지뢰를 흩뿌림. 지뢰가 근처 적에게 천천히 다가감',
-  'orbit+aura':'자기장이 넓어지고 피해 대신 사냥터가 됨. 위성 10개가 흩어져 자기장 안의 적을 각자 추격',
+  'orbit+aura':'자기장이 넓어지고 피해 대신 둔화만 남음. 위성 12개가 화면 곳곳에 흩어져 각자 적을 추격, 들이받는 운동량으로 피해',
   'orbit+fire':'위성이 불꽃 나선을 남기고, 1.5초마다 불 고리를 내뿜음',
   'orbit+missile':'미사일마다 위성 4개가 돌며 호위. 미사일이 터지면 위성은 그 자리에 잠시 남음',
   'orbit+mine':'위성이 근처 적에게 지뢰를 던져 묻음. 지뢰가 근처 적에게 천천히 다가감',
@@ -281,6 +282,8 @@ const ET={
   splitter:{r:15,hp:1200, spd:95, acc:2, c:'#3de0e0',orb:[2,1],score:35, label:'분열체'},
   elite:   {r:34,hp:30000,spd:70, acc:1.2,c:'#c02a4a',orb:[20,3],score:400,label:'거대 엘리트'}
 };
+// 체력 재생: 레벨마다 +4.5% (최대 체력 +8%의 약 56%)
+function hpRegenRate(){return (6+U.hpRegen)*(1+.045*(lvl-1));}
 function syncHp(){const n=Math.round((100+8*(lvl-1))*U.hpMul);if(n>U.hpMax)P.hp+=n-U.hpMax;U.hpMax=n;}
 function mkEnemy(type,x,y){
   const d=ET[type];
@@ -331,7 +334,7 @@ function initGame(withTut){
   cam.x=P.x-VW/2;cam.y=P.y-VH/2;
   enemies=[];bullets=[];parts=[];rings=[];texts=[];debris=[];orbs=[];booms=[];flashes=[];screenFlash=0;pbullets=[];bolts=[];chainCd=0;shrapCd=0;growPulseT=0;sats=[];zones=[];caps=[];fzones=[];linkSegs=[];rails=[];fireMarks=[];hunters=[];frings=[];throws=[];flames=[];missiles=[];mines=[];auraT=0;flameT=0;missileT=1;mineT=0;
   slowT=0;novaT=0;waves=[];lastWave=-1;shockCache=null;shockCacheT=-1;novaFx=0;holes=[];holeCd=0;
-  combo=0;comboT=0;score=0;kills=0;bestImpact=0;shake=0;hitstop=0;flash=0;time=0;banner=0;
+  pierceN=0;pierceT=0;orbMul=1;combo=0;comboT=0;score=0;kills=0;bestImpact=0;shake=0;hitstop=0;flash=0;time=0;banner=0;
   lastHS=-1;sweepN=0;sweepT=0;sweepShow=0;sweepBest=0;
   dmgStats={};heavyT=18;xp=0;lvl=1;pendingLv=0;packT=1;surgeT=40;surgeN=0;eliteT=90;orbStreak=0;
   genRocks();
@@ -521,7 +524,7 @@ function killEnemy(e,I){
   if(U.sp.absorb){const cap=.3*41,g=Math.min(.08,cap-P_sp.absGain);if(g>0){P_sp.absGain+=g;U.rmax+=g;}}
   combo=comboT>0?combo+1:1;comboT=1.8;
   kills++;score+=e.score*Math.max(1,combo);
-  const o=ET[e.type].orb;dropOrbs(e.x,e.y,o[0],o[1]);
+  const o=ET[e.type].orb;dropOrbs(e.x,e.y,o[0],o[1]*orbMul);
   if(combo%25===0){floatText(P.x,P.y-P.r-50,combo+' 연속 처치!','#ffd76a',34);shake=Math.min(26,shake+6);}
   if(I>bestImpact)bestImpact=I;
   const near=dP(e.x,e.y)<1100;
@@ -603,22 +606,46 @@ function growPulse(){
   }
 }
 // 위성: 내 주위를 도는 무거운 구슬. 적과 부딪히면 위성 속도로 충격량
-function updateHunters(dt){   // 전자 고리: 자기장 안에서 적을 쫓는 위성 6개
-  const R=auraR(),NH=10;while(hunters.length<NH){const a=hunters.length/NH*6.28;hunters.push({x:P.x+Math.cos(a)*R*.5,y:P.y+Math.sin(a)*R*.5,vx:0,vy:0});}
+function updateHunters(dt){   // 전자 고리: 위성 12개가 화면 곳곳에 흩어져 각자 적을 사냥 (자기장에 묶이지 않음)
+  const NH=12,MH=4,M=40;   // MH: 위성 질량, M: 화면 가장자리 여유
+  const x0=cam.x+M,y0=cam.y+M,x1=cam.x+VW-M,y1=cam.y+VH-M;
+  // 화면을 4×3 칸으로 나눠 위성마다 담당 구역을 줌 → 한곳에 뭉치지 않음
+  while(hunters.length<NH){const i=hunters.length,u=((i%4)+.5)/4,v=(Math.floor(i/4)+.5)/3;
+    hunters.push({u,v,x:P.x+rnd(-60,60),y:P.y+rnd(-60,60),vx:rnd(-300,300),vy:rnd(-300,300),wx:u,wy:v,wt:0});}
   moons.length=0;const claimed=new Set();
   for(const h of hunters){
-    let t=null,bd=1e9;for(const e of enemies){if(e.dead||e.spawn>0||claimed.has(e))continue;if(Math.hypot(e.x-P.x,e.y-P.y)>R+e.r)continue;const d=Math.hypot(e.x-h.x,e.y-h.y);if(d<bd){bd=d;t=e;}}
+    const hx=cam.x+h.u*VW,hy=cam.y+h.v*VH;   // 담당 구역 중심 (화면 기준)
+    // 목표: 화면 안 적 중 (나와의 거리 + 구역 중심과의 거리 절반)이 가장 작은 것, 다른 위성이 잡은 적은 피함
+    let t=null,bs=1e9;
+    for(const e of enemies){if(e.dead||e.spawn>0||claimed.has(e))continue;
+      if(e.x<cam.x||e.x>cam.x+VW||e.y<cam.y||e.y>cam.y+VH)continue;
+      const sc=Math.hypot(e.x-h.x,e.y-h.y)+.5*Math.hypot(e.x-hx,e.y-hy);if(sc<bs){bs=sc;t=e;}}
     if(t)claimed.add(t);
-    let ax,ay;if(t){ax=t.x-h.x;ay=t.y-h.y;}else{const a=Math.atan2(h.y-P.y,h.x-P.x)+.8;ax=P.x+Math.cos(a)*R*.6-h.x;ay=P.y+Math.sin(a)*R*.6-h.y;}
-    for(const o of hunters){if(o===h)continue;const dx=h.x-o.x,dy=h.y-o.y,d=Math.hypot(dx,dy);if(d<70&&d>1e-3){ax+=dx/d*(70-d)*8;ay+=dy/d*(70-d)*8;}}   // 서로 떨어지게
-    const al=Math.hypot(ax,ay)||1;h.vx+=ax/al*4200*dt+P.vx*dt*3;h.vy+=ay/al*4200*dt+P.vy*dt*3;
+    let ax,ay;
+    if(t){ax=t.x-h.x;ay=t.y-h.y;}
+    else{   // 사냥감이 없으면 자기 구역 안을 떠돌아다님
+      h.wt-=dt;const wx=cam.x+h.wx*VW,wy=cam.y+h.wy*VH;
+      if(h.wt<=0||Math.hypot(wx-h.x,wy-h.y)<50){h.wt=rnd(.8,1.8);h.wx=clamp(h.u+rnd(-.12,.12),.05,.95);h.wy=clamp(h.v+rnd(-.16,.16),.05,.95);}
+      ax=cam.x+h.wx*VW-h.x;ay=cam.y+h.wy*VH-h.y;}
+    const al=Math.hypot(ax,ay)||1;ax=ax/al*4200;ay=ay/al*4200;
+    for(const o of hunters){if(o===h)continue;const dx=h.x-o.x,dy=h.y-o.y,d=Math.hypot(dx,dy);if(d<160&&d>1e-3){ax+=dx/d*(160-d)*12;ay+=dy/d*(160-d)*12;}}   // 서로 떨어지게
+    // 화면 가장자리에 다가가면 안쪽으로 밀어줌
+    const EB=120,EK=40;
+    if(h.x<x0+EB)ax+=(x0+EB-h.x)*EK;if(h.x>x1-EB)ax-=(h.x-x1+EB)*EK;
+    if(h.y<y0+EB)ay+=(y0+EB-h.y)*EK;if(h.y>y1-EB)ay-=(h.y-y1+EB)*EK;
+    h.vx+=ax*dt;h.vy+=ay*dt;
     const sp=Math.hypot(h.vx,h.vy),MX=1300;if(sp>MX){h.vx*=MX/sp;h.vy*=MX/sp;}
     h.x+=h.vx*dt;h.y+=h.vy*dt;
-    const dx=h.x-P.x,dy=h.y-P.y,d=Math.hypot(dx,dy);if(d>R){h.x=P.x+dx/d*R;h.y=P.y+dy/d*R;const vn=(h.vx*dx+h.vy*dy)/d;if(vn>0){h.vx-=1.6*vn*dx/d;h.vy-=1.6*vn*dy/d;}}
+    // 그래도 화면 밖으로 나가면 벽처럼 튕김 (카메라가 순간 이동한 경우 등)
+    if(h.x<x0){h.x=x0;if(h.vx<0)h.vx*=-.5;}if(h.x>x1){h.x=x1;if(h.vx>0)h.vx*=-.5;}
+    if(h.y<y0){h.y=y0;if(h.vy<0)h.vy*=-.5;}if(h.y>y1){h.y=y1;if(h.vy>0)h.vy*=-.5;}
     moons.push({x:h.x,y:h.y});
+    // 충돌: 순수 운동량 교환. 다가가는 상대 속도만큼 충격량, 위성도 그만큼 되튕김
     for(const e of enemies){if(e.dead||e.spawn>0||(e.moonCd||0)>time)continue;const ex=e.x-h.x,ey=e.y-h.y,q=Math.hypot(ex,ey);if(q>e.r+10||q<1e-6)continue;
-      const nx=ex/q,ny=ey/q,cl=Math.max(200,(h.vx-e.vx)*nx+(h.vy-e.vy)*ny),J=(1+REST)*cl/(1/4+1/mass(e.r));
-      e.moonCd=time+.12;dmgSrc=TK('orbit+aura');hitEnemy(e,J*12*1.3*PAS*U.dmgMul,J,nx,ny,1,true);dmgSrc=null;h.vx*=-.4;h.vy*=-.4;}
+      const nx=ex/q,ny=ey/q,cl=(h.vx-e.vx)*nx+(h.vy-e.vy)*ny;if(cl<=0)continue;
+      const J=(1+REST)*cl/(1/MH+1/mass(e.r));
+      e.moonCd=time+.12;dmgSrc=TK('orbit+aura');hitEnemy(e,J*12*1.3*PAS*U.dmgMul,J,nx,ny,1,true);dmgSrc=null;
+      h.vx-=J/MH*nx;h.vy-=J/MH*ny;}
   }
 }
 function updateMoons(dt){
@@ -1133,8 +1160,19 @@ function updateOrbs(dt){
 /* =========================================================
    업데이트
    ========================================================= */
+// 바위 격자: 바위는 움직이지 않으므로 칸마다 "가까울 수 있는 바위" 목록을 미리 만들어 둠 (성능용, 결과는 전체 검사와 같음)
+const RG_C=200,RG_M=150;let rgFor=null,rgW=0,rgH=0,rgCells=null;
+function rockGrid(){
+  rgFor=rocks;rgW=Math.ceil(WW/RG_C)+2;rgH=Math.ceil(WH/RG_C)+2;rgCells=Array.from({length:rgW*rgH},()=>[]);
+  rocks.forEach((k,i)=>{const R=k.r+RG_M;
+    for(let cy=0;cy<rgH;cy++)for(let cx=0;cx<rgW;cx++){const x0=(cx-1)*RG_C,y0=(cy-1)*RG_C,nx=Math.max(x0,Math.min(k.x,x0+RG_C)),ny=Math.max(y0,Math.min(k.y,y0+RG_C));
+      if((k.x-nx)**2+(k.y-ny)**2<=R*R)rgCells[cy*rgW+cx].push(k);}});
+}
 function circleRockPush(o,rad){ // 바위에서 밀어내고 법선/접근속도 반환
-  for(const k of rocks){
+  if(rgFor!==rocks)rockGrid();
+  const cx=Math.floor(o.x/RG_C)+1,cy=Math.floor(o.y/RG_C)+1;
+  const list=rad<=RG_M-50&&cx>=0&&cy>=0&&cx<rgW&&cy<rgH?rgCells[cy*rgW+cx]:rocks;   // 아주 큰 물체·맵 밖은 전체 검사
+  for(const k of list){
     const dx=o.x-k.x,dy=o.y-k.y,d=Math.hypot(dx,dy);
     const R=k.r+rad;
     if(d>=R||d<1e-6)continue;
@@ -1148,7 +1186,7 @@ function circleRockPush(o,rad){ // 바위에서 밀어내고 법선/접근속도
 function update(dt){
   time+=dt;sfxBudget=0;
   horde(dt);
-  P.hp=Math.min(U.hpMax,P.hp+(6+U.hpRegen)*dt);   // HP 지속 회복
+  P.hp=Math.min(U.hpMax,P.hp+hpRegenRate()*dt);   // HP 지속 회복
 
   /* ----- 이동 ----- */
   let ax=(act('right')?1:0)-(act('left')?1:0),ay=(act('down')?1:0)-(act('up')?1:0);
@@ -1237,7 +1275,7 @@ function update(dt){
   {const cx=clamp(P.x+P.vx*.25-VW/2,0,WW-VW),cy=clamp(P.y+P.vy*.25-VH/2,0,WH-VH),cf=1-Math.exp(-7*dt);
    cam.x+=(cx-cam.x)*cf;cam.y+=(cy-cam.y)*cf;}
   P.trail.push({x:P.x,y:P.y,r:P.r});if(P.trail.length>14)P.trail.shift();
-  comboT-=dt;if(comboT<=0)combo=0;
+  comboT-=dt;if(comboT<=0)combo=0;pierceT-=dt;
 
   for(const k in wOwner)delete wOwner[k];for(const ev of EVOS)if(U.evos[ev.key]){wOwner[ev.a]=ev.key;wOwner[ev.b]=ev.key;}
   PH='billiard';
@@ -1307,7 +1345,14 @@ function update(dt){
       }else{
         dmgE=J*U.dmgMul;Jr=Math.min(J,Math.max(0,e.hp)/U.dmgMul); // 부서지는 순간까지만 나에게 전달
       }
-      hitEnemy(e,dmgE,J,nx,ny);
+      if(pierceT<=0)pierceN=0;
+      orbMul=Math.min(2.5,1+.1*pierceN);   // 관통 중에 부순 적은 구슬 값이 커짐
+      hitEnemy(e,dmgE,J,nx,ny);orbMul=1;
+      if(e.dead){   // 몸으로 부숨: 관통 수 +1, 충격량에 비례해 체력 회복
+        pierceN++;pierceT=.5;
+        const hl=U.hpMax*.012*clamp(J/1500,.5,2);P.hp=Math.min(U.hpMax,P.hp+hl);
+        if(hl>U.hpMax*.008&&dP(P.x,P.y)<1100)addFlash(P.x,P.y,P.r*1.6+10,'#7dffb0',.12,true);
+      }
       if(J>=250){chainLightning(e,J);shrapnel(nx,ny,J);}
       const dvP=Jr/m;
       if(U.sp.elastic&&!e.dead&&e.hp>0){   // 탄성 충돌: 속력을 그대로 둔 채 반사
@@ -1375,15 +1420,21 @@ function update(dt){
   if(pendingLv>0&&state==='play')levelUp();
 }
 /* 적끼리: 겹치지 않게 밀어내고, 날아가던(기절한) 적이 부딪히면 충격량만큼 서로 피해 */
+// 적끼리 밀어내기용 격자 (매 프레임 Map·배열을 새로 만들지 않도록 재사용. 처리 순서는 예전과 같음)
+const SG_C=64,SG_P=2;let sgW=0,sgH=0,sgHead=null,sgNext=null,sgTail=null;
 function separate(){
-  const C=64,grid=new Map();
-  for(let i=0;i<enemies.length;i++){const e=enemies[i];if(e.dead)continue;const k=Math.floor(e.x/C)*4096+Math.floor(e.y/C);let a=grid.get(k);if(!a){a=[];grid.set(k,a);}a.push(i);}
+  const C=SG_C;
+  if(!sgHead){sgW=Math.ceil(WW/C)+2*SG_P;sgH=Math.ceil(WH/C)+2*SG_P;sgHead=new Int32Array(sgW*sgH);sgTail=new Int32Array(sgW*sgH);}
+  if(!sgNext||sgNext.length<enemies.length)sgNext=new Int32Array(Math.max(256,enemies.length*2));
+  sgHead.fill(-1);
+  const cellOf=(x,y)=>{let gx=Math.floor(x/C)+SG_P,gy=Math.floor(y/C)+SG_P;if(gx<0)gx=0;else if(gx>=sgW)gx=sgW-1;if(gy<0)gy=0;else if(gy>=sgH)gy=sgH-1;return gy*sgW+gx;};
+  for(let i=0;i<enemies.length;i++){const e=enemies[i];if(e.dead)continue;const c=cellOf(e.x,e.y);sgNext[i]=-1;if(sgHead[c]<0)sgHead[c]=i;else sgNext[sgTail[c]]=i;sgTail[c]=i;}   // 칸마다 번호 오름차순 연결 목록
   for(let i=0;i<enemies.length;i++){
     const e=enemies[i];if(e.dead)continue;
-    const gx=Math.floor(e.x/C),gy=Math.floor(e.y/C);
+    const gx=Math.floor(e.x/C)+SG_P,gy=Math.floor(e.y/C)+SG_P;
     for(let ox=-1;ox<=1;ox++)for(let oy=-1;oy<=1;oy++){
-      const a=grid.get((gx+ox)*4096+gy+oy);if(!a)continue;
-      for(const j of a){
+      const x=gx+ox,y=gy+oy;if(x<0||y<0||x>=sgW||y>=sgH)continue;
+      for(let j=sgHead[y*sgW+x];j>=0;j=sgNext[j]){
         if(j<=i)continue;const o=enemies[j];if(o.dead)continue;
         const dx=o.x-e.x,dy=o.y-e.y,d=Math.hypot(dx,dy),R=e.r+o.r;
         if(d>=R||d<1e-6)continue;
@@ -1603,7 +1654,7 @@ function hud(){
   ctx.textAlign='right';
   ctx.fillText('점수 '+score.toLocaleString('en-US'),W-18,28);
 
-  bar(18,H-28,200,10,P.hp/U.hpMax,'#ff5d73','HP  '+Math.ceil(Math.max(0,P.hp))+' / '+U.hpMax+'  (+'+(6+U.hpRegen)+'/s)');
+  bar(18,H-28,200,10,P.hp/U.hpMax,'#ff5d73','HP  '+Math.ceil(Math.max(0,P.hp))+' / '+U.hpMax+'  (+'+hpRegenRate().toFixed(1)+'/s)');
   const t=(P.r-U.rmin)/(U.rmax-U.rmin);
   const st=P.overload?'과부하 — 강제 축소 중':t<.4?'충전 중 (작을 때만)':'소모 중 (클수록 빠름)';
   bar(W/2-110,H-28,220,10,P.energy/U.energyMax,P.overload?'#5b6280':t<.4?'#4dd4ff':'#ffb36b','크기 에너지 · '+st,P.overload?'#ff8fa3':'#6e7aa0');
@@ -2160,7 +2211,36 @@ function frame(now){
 initGame(true);
 requestAnimationFrame(frame);
 window.__mass={get tut(){return tut;},dmgLines,iconCanvas,iconKeyOf,get devOpen(){return devOpen;},get spMode(){return spMode;},get P_sp(){return P_sp;},die,S,get menu(){return menu;},MENU_ROWS,setDmgLog:f=>{DMG_LOG=f;},inEvo,EVOS,get sats(){return sats;},get zones(){return zones;},levelUp,get opts(){return opts;},weaponCount,get flames(){return flames;},get mines(){return mines;},get missiles(){return missiles;},UPS,endTutorial,initGame,update,draw,pick,keys,get state(){return state;},get P(){return P;},get enemies(){return enemies;},
-  get orbs(){return orbs;},get lvl(){return lvl;},get sweepBest(){return sweepBest;},get rocks(){return rocks;},mkEnemy,U,get kills(){return kills;},get pbullets(){return pbullets;},get bolts(){return bolts;},supernovaReady:()=>U.nova>0&&novaT<=0,get holes(){return holes;},get novaT(){return novaT;},get slowT(){return slowT;}};
+  get orbs(){return orbs;},get lvl(){return lvl;},get sweepBest(){return sweepBest;},get rocks(){return rocks;},mkEnemy,U,get kills(){return kills;},get pbullets(){return pbullets;},get bolts(){return bolts;},supernovaReady:()=>U.nova>0&&novaT<=0,get holes(){return holes;},get moons(){return moons;},get score(){return score;},get bullets(){return bullets;},ET,WW,WH,
+  // 강화학습 관측용 (tools/rl/features.js): 스킬 발동 조건·재충전·타이머
+  MACH,VTof,mass,auraR,xpNeed,get xp(){return xp;},get combo(){return combo;},get pierceN(){return pierceN;},get pierceT(){return pierceT;},
+  get chainCd(){return chainCd;},get missileT(){return missileT;},get mineT(){return mineT;},get holeCd(){return holeCd;},get hunters(){return hunters;},get flamesN(){return flames.length;},get novaT(){return novaT;},get slowT(){return slowT;}};
+// 봇 관전 (개발용): index.html#bot=pro 로 열면 tools/sim/pro.js 봇이 대신 플레이. #bot=proevade 는 피하기만 하는 봇.
+//   #bot=rl&model=이름 — 강화학습 모델 tools/rl/models/이름.js (생략하면 latest = 가장 최근 저장본), &greedy=1 이면 확률 대신 최선 행동만
+//   &speed=2~4 로 배속. 죽으면 3초 뒤 새 판. 저장된 키 설정은 건드리지 않고 이번 창에서만 기본 키로 바꿈.
+if(typeof location!=='undefined'&&/bot=/.test(location.hash||'')){
+  const q=new URLSearchParams(location.hash.slice(1)),mode=q.get('bot')||'pro',speed=Math.max(1,Math.min(4,+(q.get('speed')||1)));
+  const srcs=mode==='rl'?['tools/rl/features.js','tools/rl/net.js','tools/rl/models/'+(q.get('model')||'latest')+'.js']:['tools/sim/pro.js'];
+  const load=i=>{if(i>=srcs.length)return run();const sc=document.createElement('script');sc.src=srcs[i];sc.onload=()=>load(i+1);
+    sc.onerror=()=>{console.error(srcs[i]+' 를 불러오지 못함 (index.html 과 같은 폴더 기준 경로)');document.title='봇 관전 실패: '+srcs[i];};document.body.appendChild(sc);};
+  const run=()=>{
+    const M=window.__mass;S.keys=JSON.parse(JSON.stringify(DEF_KEYS));
+    const set=(k,v)=>{keys[k]=!!v;};let bot;
+    if(mode==='rl'){const m=window.RL_MODEL;
+      if(!window.RLFeatures.compatible(m.spec,M)){console.error('모델이 지금 게임과 맞지 않음 (카드·적 종류·스킬 상태가 바뀜). 다시 학습 필요');document.title='봇 관전 실패: 모델 사양 불일치';return;}
+      bot=window.RLNet.makeBot(M,set,m,{greedy:q.get('greedy')==='1'});}
+    else bot=window.ProBot(M,set,mode==='proevade');
+    endTutorial();initGame(false);document.title='봇 관전 ('+mode+(mode==='rl'?' '+(q.get('model')||'latest'):'')+(speed>1?' ×'+speed:'')+')';
+    let deadAt=0;
+    (function loop(){
+      if(state==='play'&&!menu&&!devOpen){bot.tick();for(let i=1;i<speed;i++){if(state!=='play')break;update(1/60);updateFx(1/60);bot.tick();}}
+      else if(state==='upgrade')pick(bot.pickCard());
+      else if(state==='dead'){if(!deadAt)deadAt=performance.now();else if(performance.now()-deadAt>3000){deadAt=0;initGame(false);}}
+      requestAnimationFrame(loop);
+    })();
+  };
+  load(0);
+}
 })();
 </script>
 </body>
