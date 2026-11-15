@@ -9,8 +9,11 @@
 - **물리적으로 창발하는 메커니즘을 선호.** 예: 체렌코프(소닉붐) 원뿔은 그림으로 그린 게 아니라 실제 파면의 교차선으로 계산되고, 판정도 그 선과 같다. "그럴듯한 연출로 흉내" 내지 말 것.
 - **화면 텍스트 남발 금지.** "싹쓸이", "음속 돌파", "WAVE", "준비됨" 같은 문구를 사용자가 모두 지우게 했다. 새 기능에 글자 배너를 붙이지 말 것. 슬로모션도 금지.
 - 사용자가 지정한 사양은 **문자 그대로** 구현한다. 해석이 갈리면 확인하고, 임의로 "비슷한 것"을 만들지 말 것 (예: "탄환 대신 블랙홀이 탄환처럼 나간다"는 탄환을 없애라는 뜻이었다).
+- **박는 쪽이 피하는 쪽보다 이득이어야 한다.** 회복(충돌 회복)·경험치(관통 배율)도 들이받기에 묶여 있다. 새 기능이 피해 다니는 플레이를 더 이롭게 만들지 않는지 `stance.sh` 로 확인.
 - 밸런스 원칙: **강한 건 강해도 되지만, 약한 게 너무 약하면 안 된다.** 저절로 발동하는 무기(미사일·지뢰·자기장·위성)는 일부러 0.6배(`PAS`)로 낮춰 두었다.
 - 바꾼 뒤에는 실제로 돌려서 확인한다(아래 테스트). 확인 못 한 건 확인 못 했다고 말한다.
+
+> 다른 컴퓨터(노트북)에서 강화학습을 돕거나 이어받는 세션이라면 먼저 `tools/rl/REMOTE.md` 를 읽을 것.
 
 ## 실행·테스트
 ```bash
@@ -19,10 +22,16 @@ python3 tools/sim/extract.py      # index.html → tools/sim/build/game.js, game
 node tools/sim/smoke.js           # 2분 회귀 점검 (오류·프레임 시간)
 node tools/sim/bot.js ram 7 5     # 돌진형 봇 5분 (딜 출처·생존 출력)
 sh tools/sim/matrix.sh            # 무기 8 + 진화 28 의 8×8 밸런스 표 (10~15분)
+# 봇 관전: 브라우저로 index.html#bot=pro&speed=2 열기 (tools/sim/pro.js 를 불러와 대신 플레이), #bot=rl&model=이름 은 강화학습 모델
+.venv/bin/python tools/rl/py/train.py --name run1   # 순수 강화학습 (PyTorch, 보상=생존 시간). 준비·옵션은 tools/README.md
+.venv/bin/python tools/rl/py/eval.py run1           # 강화학습 모델 평가 (숙련 돌진형 봇: 평균 12.3분)
+node tools/sim/bot.js pro 201 15  # 숙련 돌진형 봇 한 판 (사람처럼 충전↔돌격, 대부분 10분 이상 생존)
+SEEDS="$(seq -s ' ' 201 224)" sh tools/sim/stance.sh 15   # 숙련 돌진형 vs 숙련 회피형 (박는 쪽이 이득인지, 약 8분)
 python3 tools/sim/screenshot.py shot.png chain+aura   # 실제 브라우저 캡처 (Playwright 필요)
 node tools/gen_docs.js            # docs/CONTENT.md 재생성 (카드·진화를 바꿨다면 실행)
 ```
 - `extract.py` 의 계측판 생성은 `index.html` 의 특정 문자열을 치환한다. 해당 코드를 바꾸면 `extract.py` 의 치환 문자열도 같이 고칠 것.
+- 강화학습 관측(`tools/rl/features.js`)은 `window.__mass` 의 게임 상태와 스킬 타이머(`MACH, VTof, mass, auraR, chainCd, missileT, mineT, holeCd, P_sp, novaT` 등)를 읽는다. 이 이름이나 스킬 발동 조건을 바꾸면 `features.js` 의 `selfList` 도 고칠 것. 카드·적 종류·`U` 수치가 바뀌면 모델은 새로 학습해야 한다.
 - 테스트 훅: `window.__mass` 가 게임 내부 상태(P, U, enemies, EVOS, UPS, levelUp, pick, initGame, endTutorial, die, setDmgLog …)를 노출한다. 하네스와 개발자 모드가 이것을 쓴다.
 
 ## 코드 지도 (`index.html` 의 `<script>` 안, 위에서 아래 순서)

@@ -1,7 +1,10 @@
 tools/sim/build/
 tools/sim/out/
+tools/sim/out_stance/
 *.png
 !docs/*.png
 node_modules/
 __pycache__/
 .DS_Store
+tools/rl/models/
+.venv/
